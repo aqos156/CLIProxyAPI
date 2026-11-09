@@ -79,3 +79,43 @@ func TestSoonestResetPreservesCodexWebSocketPreference(t *testing.T) {
 		t.Fatalf("WebSocket selection: got %v, %v; want websocket credential", got, err)
 	}
 }
+
+func TestSoonestResetProtectsFivePercentReserve(t *testing.T) {
+	now := time.Now()
+	early := &Auth{ID: "early", Provider: "claude", Metadata: map[string]any{"access_token": "synthetic-a"}}
+	late := &Auth{ID: "late", Provider: "claude", Metadata: map[string]any{"access_token": "synthetic-b"}}
+	for _, tc := range []struct {
+		name                           string
+		earlyUsed, lateUsed, shortUsed float64
+		sameReset                      bool
+		want                           *Auth
+	}{
+		{name: "one percent left versus ninety-four", earlyUsed: 99, lateUsed: 6, want: late},
+		{name: "exactly five percent is reserve", earlyUsed: 95, lateUsed: 6, want: late},
+		{name: "both healthy prefer earlier reset", earlyUsed: 94, lateUsed: 6, want: early},
+		{name: "both in reserve prefer earlier reset", earlyUsed: 99, lateUsed: 96, want: early},
+		{name: "five hour limit can put account in reserve", earlyUsed: 6, lateUsed: 6, shortUsed: 96, want: late},
+		{name: "same reset prefers more remaining", earlyUsed: 40, lateUsed: 6, sameReset: true, want: late},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			earlyReset := now.Add(16 * time.Hour)
+			lateReset := now.Add(6 * 24 * time.Hour)
+			if tc.sameReset {
+				lateReset = earlyReset
+			}
+			selector := &SoonestResetSelector{now: func() time.Time { return now }, cache: map[string]quotaEntry{
+				early.ID: {next: now.Add(time.Minute), snapshot: quotaSnapshot{
+					observed: now, weekly: quotaWindow{reset: earlyReset, used: tc.earlyUsed},
+					short: quotaWindow{reset: now.Add(time.Hour), used: tc.shortUsed},
+				}},
+				late.ID: {next: now.Add(time.Minute), snapshot: quotaSnapshot{
+					observed: now, weekly: quotaWindow{reset: lateReset, used: tc.lateUsed},
+				}},
+			}}
+			got, err := selector.Pick(context.Background(), "claude", "claude-sonnet-5-5", cliproxyexecutor.Options{}, []*Auth{early, late})
+			if err != nil || got != tc.want {
+				t.Fatalf("selection: got %v, %v; want %s", got, err, tc.want.ID)
+			}
+		})
+	}
+}
