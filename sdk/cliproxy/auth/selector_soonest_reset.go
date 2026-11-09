@@ -14,6 +14,7 @@ import (
 
 const quotaRefreshInterval = 5 * time.Minute
 const quotaSnapshotLifetime = 10 * time.Minute
+const quotaReservePercent = 5
 
 type quotaWindow struct {
 	reset time.Time
@@ -86,6 +87,7 @@ func (s *SoonestResetSelector) pickQuota(available []*Auth, model string, now ti
 	defer s.mu.Unlock()
 	var selected *Auth
 	var earliest time.Time
+	var bestRemaining float64
 	var poolProvider string
 	known := true
 	model = strings.ToLower(model)
@@ -129,15 +131,29 @@ func (s *SoonestResetSelector) pickQuota(available []*Auth, model string, now ti
 			known = false
 			continue
 		}
-		if exhausted(snapshot.weekly, now) || exhausted(snapshot.short, now) ||
-			(strings.Contains(model, "sonnet") && exhausted(snapshot.models["sonnet"], now)) ||
-			(strings.Contains(model, "opus") && exhausted(snapshot.models["opus"], now)) ||
-			(strings.Contains(model, "fable") && exhausted(snapshot.models["fable"], now)) {
+		remaining := min(remainingQuota(snapshot.weekly, now), remainingQuota(snapshot.short, now))
+		for _, family := range []string{"sonnet", "opus", "fable"} {
+			if strings.Contains(model, family) {
+				remaining = min(remaining, remainingQuota(snapshot.models[family], now))
+			}
+		}
+		if remaining <= 0 {
 			continue
 		}
-		if selected == nil || snapshot.weekly.reset.Before(earliest) || snapshot.weekly.reset.Equal(earliest) && auth.ID < selected.ID {
-			selected, earliest = auth, snapshot.weekly.reset
+		if selected != nil {
+			inReserve := remaining <= quotaReservePercent
+			selectedInReserve := bestRemaining <= quotaReservePercent
+			if inReserve != selectedInReserve {
+				if inReserve {
+					continue
+				}
+			} else if snapshot.weekly.reset.After(earliest) ||
+				(snapshot.weekly.reset.Equal(earliest) && (remaining < bestRemaining ||
+					remaining == bestRemaining && auth.ID >= selected.ID)) {
+				continue
+			}
 		}
+		selected, earliest, bestRemaining = auth, snapshot.weekly.reset, remaining
 	}
 	if !known {
 		return nil
@@ -145,8 +161,11 @@ func (s *SoonestResetSelector) pickQuota(available []*Auth, model string, now ti
 	return selected
 }
 
-func exhausted(window quotaWindow, now time.Time) bool {
-	return window.used >= 100 && (window.reset.IsZero() || window.reset.After(now))
+func remainingQuota(window quotaWindow, now time.Time) float64 {
+	if !window.reset.IsZero() && !window.reset.After(now) {
+		return 100
+	}
+	return min(100, 100-window.used)
 }
 
 func (s *SoonestResetSelector) refresh(ctx context.Context) {
