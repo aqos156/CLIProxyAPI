@@ -1611,6 +1611,9 @@ func (s *SessionAffinitySelector) Stop() {
 	if s == nil {
 		return
 	}
+	if stoppable, ok := s.fallback.(StoppableSelector); ok {
+		stoppable.Stop()
+	}
 	if s.cache != nil {
 		s.cache.Stop()
 	}
