@@ -64,3 +64,18 @@ func TestParseSoonestResetCodexUsesWeeklyWindow(t *testing.T) {
 		t.Fatalf("unexpected snapshot: %+v, %v", got, err)
 	}
 }
+
+func TestSoonestResetPreservesCodexWebSocketPreference(t *testing.T) {
+	now := time.Now()
+	httpOnly := &Auth{ID: "http", Provider: "codex", Metadata: map[string]any{"access_token": "synthetic"}}
+	websocket := &Auth{ID: "websocket", Provider: "codex", Metadata: map[string]any{"access_token": "synthetic", "websockets": true}}
+	selector := &SoonestResetSelector{now: func() time.Time { return now }, cache: map[string]quotaEntry{
+		"http":      {next: now.Add(time.Minute), snapshot: quotaSnapshot{observed: now, weekly: quotaWindow{reset: now.Add(time.Hour)}}},
+		"websocket": {next: now.Add(time.Minute), snapshot: quotaSnapshot{observed: now, weekly: quotaWindow{reset: now.Add(24 * time.Hour)}}},
+	}}
+	ctx := cliproxyexecutor.WithDownstreamWebsocket(context.Background())
+	got, err := selector.Pick(ctx, "codex", "gpt-6.1-sol", cliproxyexecutor.Options{}, []*Auth{httpOnly, websocket})
+	if err != nil || got != websocket {
+		t.Fatalf("WebSocket selection: got %v, %v; want websocket credential", got, err)
+	}
+}

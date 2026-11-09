@@ -25,16 +25,24 @@ trap cleanup EXIT
 "${ssh_hermes[@]}" 'sudo env DEBIAN_FRONTEND=noninteractive bash -ec "apt-get update -qq && unattended-upgrade"'
 stable=$(gh api repos/router-for-me/CLIProxyAPI/releases/latest --jq .tag_name)
 [[ "$stable" =~ ^v8\.[0-9]+\.[0-9]+$ ]] || { echo "Unexpected stable tag: $stable" >&2; exit 1; }
-active=$("${ssh_hermes[@]}" 'image=$(sudo docker compose --project-directory /opt/hermes-ai-gateway images -q proxy | head -1) && test -n "$image" && sudo docker image inspect "$image" --format "{{index .Config.Labels \"ai.hermes.upstream\"}}"')
-if [ "$stable" = "$active" ]; then
-  printf 'Hermes proxy already uses stable %s. Debian security updates checked.\n' "$stable"
-  exit 0
-fi
+# The image lookup runs on the VM.
+# shellcheck disable=SC2016
+active_image=$("${ssh_hermes[@]}" 'image=$(sudo docker compose --project-directory /opt/hermes-ai-gateway images -q proxy | head -1) && test -n "$image" && sudo docker image inspect "$image" --format "{{index .Config.Labels \"ai.hermes.upstream\"}} {{index .Config.Labels \"org.opencontainers.image.revision\"}}"')
+read -r active active_commit <<<"$active_image"
 [[ "$active" =~ ^v8\.[0-9]+\.[0-9]+$ ]] || { echo "The live image is missing its upstream release label." >&2; exit 1; }
+[[ "$active_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "The live image is missing its fork revision label." >&2; exit 1; }
 
 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch --no-tags origin "$branch"
 published=$(git rev-parse FETCH_HEAD)
-git fetch --no-tags upstream "refs/tags/$stable:refs/tags/$stable" "refs/tags/$active:refs/tags/$active"
+if [ "$stable" = "$active" ] && [ "$published" = "$active_commit" ]; then
+  printf 'Hermes proxy already uses stable %s. Debian security updates checked.\n' "$stable"
+  exit 0
+fi
+
+git fetch --no-tags upstream "refs/tags/$stable:refs/tags/$stable"
+if [ "$stable" != "$active" ]; then
+  git fetch --no-tags upstream "refs/tags/$active:refs/tags/$active"
+fi
 git worktree add --detach "$temp/source" "$published"
 (
   cd "$temp/source"
