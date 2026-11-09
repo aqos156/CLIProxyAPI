@@ -2,6 +2,8 @@
 
 This branch adds `routing.strategy: soonest-reset` to CLIProxyAPI. It ranks eligible, same-priority Claude and Codex OAuth credentials by the next weekly reset. The existing affinity selector keeps its bindings. The new selector only makes a choice when the existing selector would select an account, such as for a new session or failover.
 
+The selector reserves accounts with 5% or less remaining in their weekly, short-term, or applicable model quota for cases where every eligible account is in reserve. Within each group it prefers the earliest weekly reset and breaks reset-time ties by remaining quota.
+
 Quota reads run outside the request path. A cold cache, missing or stale data, mixed providers, custom transports, or an unrankable pool falls back to the normal round-robin selector. A known exhausted account is skipped when ranking a fully observed pool. The endpoints are provider implementation details and may stop supplying usable quota data. The proxy keeps serving requests if that happens.
 
 ## Release procedure
