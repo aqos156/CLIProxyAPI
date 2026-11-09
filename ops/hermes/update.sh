@@ -25,7 +25,7 @@ trap cleanup EXIT
 "${ssh_hermes[@]}" 'sudo env DEBIAN_FRONTEND=noninteractive bash -ec "apt-get update -qq && unattended-upgrade"'
 stable=$(gh api repos/router-for-me/CLIProxyAPI/releases/latest --jq .tag_name)
 [[ "$stable" =~ ^v8\.[0-9]+\.[0-9]+$ ]] || { echo "Unexpected stable tag: $stable" >&2; exit 1; }
-active=$("${ssh_hermes[@]}" 'cd /opt/hermes-ai-gateway && image=$(sudo docker compose images -q proxy | head -1) && test -n "$image" && sudo docker image inspect "$image" --format "{{index .Config.Labels \"ai.hermes.upstream\"}}"')
+active=$("${ssh_hermes[@]}" 'image=$(sudo docker compose --project-directory /opt/hermes-ai-gateway images -q proxy | head -1) && test -n "$image" && sudo docker image inspect "$image" --format "{{index .Config.Labels \"ai.hermes.upstream\"}}"')
 if [ "$stable" = "$active" ]; then
   printf 'Hermes proxy already uses stable %s. Debian security updates checked.\n' "$stable"
   exit 0
