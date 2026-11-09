@@ -14,3 +14,16 @@ Quota reads run outside the request path. A cold cache, missing or stale data, m
 6. Apply Debian security updates through the VM's signed APT sources. Leave kernel activation for a planned VM reboot.
 
 Keep live configuration, SSH material, device keys, and OAuth files outside this repository.
+
+## Public T3 Code hub limits
+
+The public listener maps only T3 Code's account-list and quota-read paths to the
+device-key-protected handlers. The responses contain anonymized account identifiers,
+usage percentages and reset times. The gateway constructs provider requests itself.
+Credential downloads, arbitrary API calls, balance and reset-credit details, and reset
+operations are outside this interface. In T3 Code, use the public base URL and enter a
+device key in the Management key field.
+
+After deploying the proxy, pass `ops/hermes/nginx-public-hub.conf` on stdin to the
+VM's `install-public-hub.sh` via SSH. This edits only the public listener, checks the
+configuration before reload, and saves a copy of the previous edge configuration.
