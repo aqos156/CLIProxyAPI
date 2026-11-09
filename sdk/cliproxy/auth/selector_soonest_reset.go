@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -50,15 +49,10 @@ type SoonestResetSelector struct {
 }
 
 func NewSoonestResetSelector() *SoonestResetSelector {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.MaxIdleConns = 4
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &SoonestResetSelector{
-		client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		}},
-		now: time.Now, cancel: cancel, requests: make(chan quotaCredential, 32), cache: make(map[string]quotaEntry),
+		client: NewSubscriptionQuotaClient(),
+		now:    time.Now, cancel: cancel, requests: make(chan quotaCredential, 32), cache: make(map[string]quotaEntry),
 	}
 	go s.refresh(ctx)
 	return s
@@ -96,15 +90,12 @@ func (s *SoonestResetSelector) pickQuota(available []*Auth, model string, now ti
 	known := true
 	model = strings.ToLower(model)
 	for _, auth := range available {
-		provider := strings.ToLower(auth.Provider)
-		token, _ := auth.Metadata["access_token"].(string)
-		accountID, _ := auth.Metadata["account_id"].(string)
-		baseURL, _ := auth.Metadata["base_url"].(string)
-		if (provider != "claude" && provider != "codex") || auth.AuthKind() != AuthKindOAuth ||
-			token == "" || auth.ProxyURL != "" || auth.Attributes["base_url"] != "" || baseURL != "" || IsCodexUseSIWC(auth) {
+		credential, ok := subscriptionQuotaCredential(auth)
+		if !ok {
 			known = false
 			continue
 		}
+		provider := credential.provider
 		if poolProvider == "" {
 			poolProvider = provider
 		} else if poolProvider != provider {
@@ -126,10 +117,7 @@ func (s *SoonestResetSelector) pickQuota(available []*Auth, model string, now ti
 			}
 			if len(s.cache) < 1024 {
 				select {
-				case s.requests <- quotaCredential{
-					id: auth.ID, provider: provider, accessToken: token, accountID: accountID,
-					epoch: entry.epoch, version: entry.version,
-				}:
+				case s.requests <- credential:
 					entry.next = now.Add(quotaRefreshInterval)
 					s.cache[auth.ID] = entry
 				default:
@@ -191,35 +179,11 @@ func (s *SoonestResetSelector) refresh(ctx context.Context) {
 }
 
 func (s *SoonestResetSelector) fetchQuota(ctx context.Context, credential quotaCredential) (quotaSnapshot, error) {
-	endpoint := "https://api.anthropic.com/api/oauth/usage"
-	if credential.provider == "codex" {
-		endpoint = "https://chatgpt.com/backend-api/wham/usage"
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	root, err := fetchSubscriptionQuota(ctx, s.client, credential)
 	if err != nil {
 		return quotaSnapshot{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+credential.accessToken)
-	req.Header.Set("Accept", "application/json")
-	if credential.provider == "claude" {
-		req.Header.Set("Anthropic-Beta", "oauth-2025-04-20")
-	} else if credential.accountID != "" {
-		req.Header.Set("ChatGPT-Account-Id", credential.accountID)
-	}
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return quotaSnapshot{}, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return quotaSnapshot{}, errors.New("quota endpoint rejected request")
-	}
-	const maxBytes = 128 * 1024
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
-	if err != nil || len(body) > maxBytes || !ojson.ValidBytes(body) {
-		return quotaSnapshot{}, errors.New("invalid quota response")
-	}
-	return parseQuotaSnapshot(ojson.ParseBytes(body), credential.provider, s.now())
+	return parseQuotaSnapshot(root, credential.provider, s.now())
 }
 
 func parseQuotaSnapshot(root ojson.Result, provider string, now time.Time) (quotaSnapshot, error) {
