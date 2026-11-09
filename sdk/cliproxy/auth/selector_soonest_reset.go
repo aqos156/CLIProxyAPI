@@ -77,6 +77,7 @@ func (s *SoonestResetSelector) Pick(ctx context.Context, provider, model string,
 	if err != nil {
 		return nil, err
 	}
+	available = preferCodexWebsocketAuths(ctx, provider, available)
 	if len(available) == 1 {
 		return available[0], nil
 	}
