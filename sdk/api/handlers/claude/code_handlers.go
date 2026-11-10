@@ -597,7 +597,9 @@ func (h *ClaudeCodeAPIHandler) toClaudeErrorWithRetryAfter(msg *interfaces.Error
 			Message: message,
 		},
 	}
-	if clienterror.IsClaudeThreadNotFound(status, errors.New(errText)) {
+	if status == http.StatusBadRequest && ojson.Get(errText, "error.details.error_code").String() == "thread_fingerprint_mismatch" {
+		response.Error.Details = &claudeErrorDetails{ErrorCode: "thread_fingerprint_mismatch"}
+	} else if clienterror.IsClaudeThreadNotFound(status, errors.New(errText)) {
 		response.Error.Details = &claudeErrorDetails{ErrorCode: "thread_not_found"}
 	}
 	return response
