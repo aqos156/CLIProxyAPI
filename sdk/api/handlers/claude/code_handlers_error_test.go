@@ -907,3 +907,17 @@ func TestClaudeStreamMultiLineDataEventsAreRecognizedAcrossChunks(t *testing.T) 
 		}
 	})
 }
+
+func TestClaudeErrorPreservesThreadFingerprintMismatchForReplay(t *testing.T) {
+	handler := &ClaudeCodeAPIHandler{}
+	err := responseBodyOnlyClaudeError{body: []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"Thread does not match: anthropic-beta","details":{"error_code":"thread_fingerprint_mismatch"}}}`)}
+	msg := &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: err}
+	response := handler.toClaudeError(msg)
+	if response.Error.Details == nil || response.Error.Details.ErrorCode != "thread_fingerprint_mismatch" {
+		t.Fatalf("unexpected thread error details: %+v", response.Error)
+	}
+	msg.StatusCode = http.StatusForbidden
+	if got := handler.toClaudeError(msg).Error.Details; got != nil {
+		t.Fatalf("wrong HTTP status should not signal a replay: %+v", got)
+	}
+}
