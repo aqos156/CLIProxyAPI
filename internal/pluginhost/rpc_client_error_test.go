@@ -92,8 +92,9 @@ func TestPluginErrorCarriesRetryAfterIntoCooldownAndHTTPHeader(t *testing.T) {
 	if errExec == nil {
 		t.Fatal("authMgr.Execute returned nil error")
 	}
-	// MarkResult clamps the 7s Retry-After hint up to the 10s quota cooldown
-	// floor for both the model state and the terminal pool Retry-After header.
+	after := time.Now()
+	// A terminal 429 reports the pool's recovery, which has a 10s minimum.
+	const cooldownFloor = 10 * time.Second
 	if got := coreauth.SafeResponseHeaders(errExec).Get("Retry-After"); got != "10" {
 		t.Fatalf("SafeResponseHeaders(errExec) Retry-After = %q, want 10", got)
 	}
@@ -102,8 +103,12 @@ func TestPluginErrorCarriesRetryAfterIntoCooldownAndHTTPHeader(t *testing.T) {
 		t.Fatalf("GetByID(%q) missing", authID)
 	}
 	state := updated.ModelStates[model]
-	if state == nil || !state.NextRetryAfter.After(before.Add(9*time.Second)) {
-		t.Fatalf("model NextRetryAfter = %v, want at least %v (10s cooldown floor)", state, before.Add(10*time.Second))
+	if state == nil {
+		t.Fatal("model cooldown state is missing")
+	}
+	earliest, latest := before.Add(cooldownFloor), after.Add(cooldownFloor)
+	if next := state.NextRetryAfter; next.Before(earliest) || next.After(latest) {
+		t.Fatalf("model NextRetryAfter = %v, want between %v and %v", next, earliest, latest)
 	}
 }
 
