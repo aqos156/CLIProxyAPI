@@ -15,28 +15,30 @@ trial="hermes-ai-trial-${backup##*.}"
 stage=$(mktemp -d)
 trap 'docker rm -f "$trial" >/dev/null 2>&1 || true; rm -rf -- "$stage"' EXIT
 
-python3 - "$stage/config.yaml" <<'PY'
+python3 - "$stage/config.yaml" "$stage/device-key" <<'PY'
 import json
 from pathlib import Path
 import secrets
 import sys
+key = secrets.token_urlsafe(32)
+Path(sys.argv[2]).write_text(key)
 Path(sys.argv[1]).write_text(json.dumps({
     "config-version": 8, "server": {"port": 8317},
     "routing": {"strategy": "soonest-reset", "session-affinity": True},
-    "access": {"api-keys": [secrets.token_urlsafe(32)]},
+    "access": {"api-keys": [key]},
 }))
 PY
 docker run --detach --name "$trial" --memory 384m --cpus 1 --pids-limit 128 \
   --security-opt no-new-privileges:true --publish 127.0.0.1::8317 \
   --mount "type=bind,src=$stage/config.yaml,dst=/CLIProxyAPI/config.yaml" "$image" >/dev/null
 trial_port=$(docker port "$trial" 8317/tcp | sed 's/.*://')
-python3 - "$trial_port" "$stage/config.yaml" <<'PY'
+python3 - "$trial_port" "$stage/device-key" <<'PY'
 import http.client
 import json
 from pathlib import Path
 import sys
 import time
-key = json.loads(Path(sys.argv[2]).read_text())["access"]["api-keys"][0]
+key = Path(sys.argv[2]).read_text()
 for _ in range(20):
     try:
         conn = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=2)
